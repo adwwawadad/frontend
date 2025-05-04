@@ -1,90 +1,116 @@
 import { NextResponse } from 'next/server';
-import { connectMongoDB, Admin } from '@/lib/models';
-import { createHash } from 'crypto';
-import mongoose from 'mongoose';
+import { connect, isConnected } from '@/lib/mongodb';
+import { Admin } from '@/lib/models';
+import { hash } from 'bcrypt';
 
-// Şifre hashleme fonksiyonu
-function hashPassword(password: string): string {
-  return createHash('sha256').update(password).digest('hex');
+// API'nin dinamik olarak çalışmasını sağla
+export const dynamic = 'force-dynamic';
+
+// Güvenli gösterilebilir MongoDB URI oluştur
+function getMaskedMongoURI() {
+  const uri = process.env.MONGODB_URI || '';
+  if (!uri) return 'MONGODB_URI not set';
+  
+  try {
+    // URI'deki kullanıcı adı ve şifreyi maskele
+    const maskedUri = uri.replace(/(mongodb(?:\+srv)?:\/\/)([^:]+):([^@]+)(@.+)/, '$1****:****$4');
+    return maskedUri;
+  } catch (error) {
+    return 'Error masking URI';
+  }
 }
 
-// Hem geliştirme hem de üretim ortamında çalışabilecek setup API'si
-export async function GET(request: Request) {
+/**
+ * GET /api/setup
+ * 
+ * İlk admin kullanıcısını oluşturmak için API
+ * Bu fonksiyon, sadece admin kullanıcısı yoksa ve
+ * development modunda çalışırken veya AUTO_SETUP true ise çalışır.
+ */
+export async function GET() {
+  // Loglama için veritabanı bilgilerini hazırla (hassas bilgileri maskeleyerek)
+  const dbInfo = {
+    uri: getMaskedMongoURI(),
+    dbName: process.env.USE_PROJECT_DB === 'true' 
+      ? `${process.env.PROJECT_ID || 'default'}_db` 
+      : 'normal_db',
+    isConnected: isConnected(),
+    env: process.env.NODE_ENV,
+    autoSetup: process.env.AUTO_SETUP === 'true'
+  };
+
   try {
-    await connectMongoDB();
+    // Sadece geliştirme modunda veya AUTO_SETUP etkinse çalış
+    if (process.env.NODE_ENV !== 'development' && process.env.AUTO_SETUP !== 'true') {
+      console.log('[Setup API] Geliştirme modu veya AUTO_SETUP etkin değil, erişim reddedildi');
+      return NextResponse.json({ 
+        success: false, 
+        message: 'Bu endpoint sadece geliştirme modunda veya AUTO_SETUP=true olduğunda çalışır',
+        dbInfo
+      }, { status: 403 });
+    }
+
+    // MongoDB'ye bağlan
+    const client = await connect();
     
-    // Admin sayısını kontrol et (önce bunu yapalım, zaten admin varsa token kontrolü gereksiz)
+    // Veritabanı bağlantısını kontrol et
+    if (!client) {
+      console.error('[Setup API] MongoDB bağlantısı kurulamadı');
+      return NextResponse.json({ 
+        success: false, 
+        message: 'MongoDB bağlantısı başarısız',
+        dbInfo
+      }, { status: 500 });
+    }
+
+    // Admin koleksiyonundaki kullanıcı sayısını kontrol et
     const adminCount = await Admin.countDocuments();
     
-    // Veritabanı bilgilerini hazırla
-    const dbInfo = {
-      name: mongoose.connection.db?.databaseName || 'unknown',
-      isRandomDb: process.env.USE_RANDOM_DB === 'true',
-      isConnected: mongoose.connection.readyState === 1,
-      env: process.env.NODE_ENV,
-      collections: [] as string[]
-    };
+    console.log(`[Setup API] Mevcut admin sayısı: ${adminCount}`);
     
-    // Koleksiyonları listele
-    if (mongoose.connection.db) {
-      const collections = await mongoose.connection.db.listCollections().toArray();
-      dbInfo.collections = collections.map((c: any) => c.name);
-    }
-    
-    // Eğer zaten admin kullanıcısı varsa, bilgileri döndür (token kontrolü yapma)
+    // Zaten admin varsa, yeni oluşturmaya gerek yok
     if (adminCount > 0) {
-      return NextResponse.json({
-        success: false,
+      console.log('[Setup API] Zaten admin kullanıcıları mevcut');
+      return NextResponse.json({ 
+        success: true, 
         message: 'Zaten admin kullanıcıları mevcut',
-        count: adminCount,
         dbInfo
       });
     }
     
-    // Admin yoksa, yeni oluşturmak için token kontrolü yap
-    // Request URL'ini parse et ve query parametrelerini al
-    const { searchParams } = new URL(request.url);
-    const setupToken = searchParams.get('token');
+    // Default admin bilgilerini al
+    const defaultAdminUsername = process.env.DEFAULT_ADMIN_USERNAME || 'admin';
+    const defaultAdminPassword = process.env.DEFAULT_ADMIN_PASSWORD || 'admin123!';
     
-    // .env'de tanımlanan setup token'ı al
-    const validToken = process.env.SETUP_TOKEN;
+    // Şifreyi hashle
+    const hashedPassword = await hash(defaultAdminPassword, 10);
     
-    // Eğer SETUP_TOKEN ayarlanmışsa ve gelen token eşleşmiyorsa izin verme
-    if (validToken && validToken !== setupToken) {
-      return NextResponse.json({
-        success: false,
-        message: 'Geçersiz token. Bu API sadece doğru token ile çağrılabilir.',
-        hint: 'API_URL/api/setup?token=your-setup-token şeklinde çağırın'
-      }, { status: 403 });
-    }
+    // Yeni admin kullanıcısı oluştur
+    const newAdmin = new Admin({
+      username: defaultAdminUsername,
+      password: hashedPassword,
+      createdAt: new Date()
+    });
     
-    // Varsayılan admin şifresi - environment variable'dan al veya default kullan
-    const defaultPassword = process.env.DEFAULT_ADMIN_PASSWORD || 'admin123456';
+    // Veritabanına kaydet
+    await newAdmin.save();
     
-    // Varsayılan admin kullanıcısı oluştur
-    const defaultAdmin = {
-      username: 'admin',
-      password: hashPassword(defaultPassword),
-      isActive: true
-    };
+    console.log('[Setup API] Yeni admin kullanıcısı başarıyla oluşturuldu');
     
-    const admin = await Admin.create(defaultAdmin);
-    
-    return NextResponse.json({
-      success: true,
-      message: 'Varsayılan admin kullanıcısı oluşturuldu',
-      admin: {
-        username: admin.username,
-        id: admin._id
-      },
+    // Başarılı yanıt
+    return NextResponse.json({ 
+      success: true, 
+      message: 'Admin kullanıcısı başarıyla oluşturuldu',
       dbInfo
     });
-  } catch (error: any) {
-    console.error('Setup API error:', error);
-    return NextResponse.json({
-      success: false,
-      message: 'Kurulum hatası: ' + error.message,
-      error: error.stack
+  } catch (error) {
+    console.error('[Setup API] Hata:', error);
+    
+    // Hata yanıtı
+    return NextResponse.json({ 
+      success: false, 
+      message: `Hata: ${error instanceof Error ? error.message : 'Bilinmeyen hata'}`,
+      dbInfo
     }, { status: 500 });
   }
 } 

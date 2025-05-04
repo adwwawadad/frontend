@@ -7,16 +7,15 @@ import crypto from 'crypto';
  */
 export async function autoSetupAdmin(): Promise<void> {
   try {
-    // AUTO_SETUP false ise çalışma
-    if (process.env.AUTO_SETUP !== 'true') {
-      console.log('[AutoSetup] Otomatik kurulum devre dışı (AUTO_SETUP=false)');
+    // Eğer build zamanı ise, kurulumu atla
+    if (typeof window === 'undefined' && process.env.NODE_ENV === 'production' && process.env.BUILD_MODE === 'true') {
+      console.log('[AutoSetup] Build modu tespit edildi, kurulum atlanıyor (çalışma zamanında tekrar deneyecek)');
       return;
     }
 
-    // Setup için gerekli bilgileri kontrol et
-    const setupToken = process.env.SETUP_TOKEN;
-    if (!setupToken) {
-      console.warn('[AutoSetup] SETUP_TOKEN tanımlanmamış - otomatik kurulum güvenlik nedeniyle atlanıyor');
+    // AUTO_SETUP false ise çalışma
+    if (process.env.AUTO_SETUP !== 'true') {
+      console.log('[AutoSetup] Otomatik kurulum devre dışı (AUTO_SETUP=false)');
       return;
     }
 
@@ -25,51 +24,66 @@ export async function autoSetupAdmin(): Promise<void> {
     // API URL'ini belirleme
     let baseUrl = '';
     
-    // NEXT_PUBLIC_API_URL varsa kullan
-    if (process.env.NEXT_PUBLIC_API_URL) {
-      baseUrl = process.env.NEXT_PUBLIC_API_URL;
-    } 
-    // Vercel ortamındaysa
-    else if (process.env.VERCEL_URL) {
-      baseUrl = `https://${process.env.VERCEL_URL}`;
-    }
-    // Yerel geliştirme ortamında
-    else {
-      baseUrl = 'http://localhost:3000';
+    // Client tarafında mı çalışıyor?
+    const isClient = typeof window !== 'undefined';
+    
+    if (isClient) {
+      // Tarayıcıda çalışıyorsa, mevcut window.location kullan
+      baseUrl = window.location.origin;
+    } else {
+      // Server tarafında ise
+      // NEXT_PUBLIC_API_URL varsa kullan
+      if (process.env.NEXT_PUBLIC_API_URL) {
+        baseUrl = process.env.NEXT_PUBLIC_API_URL;
+      } 
+      // Vercel ortamındaysa
+      else if (process.env.VERCEL_URL) {
+        baseUrl = `https://${process.env.VERCEL_URL}`;
+      }
+      // Yerel geliştirme ortamında
+      else {
+        baseUrl = 'http://localhost:3000';
+      }
     }
     
     // URL'nin sonunda / varsa kaldır
     baseUrl = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
     
-    const setupUrl = `${baseUrl}/api/setup?token=${encodeURIComponent(setupToken)}`;
+    // Setup API'yi çağır - token parametresi kaldırıldı çünkü artık route.ts dosyasında kullanılmıyor
+    const setupUrl = `${baseUrl}/api/setup`;
     
-    console.log(`[AutoSetup] Setup API URL: ${setupUrl.replace(/token=.+$/, 'token=****')}`);
+    console.log(`[AutoSetup] Setup API URL: ${setupUrl}`);
     
-    const response = await fetch(setupUrl, {
-      method: 'GET',
-      headers: {
-        'Cache-Control': 'no-cache, no-store',
-        'Pragma': 'no-cache',
+    try {
+      const response = await fetch(setupUrl, {
+        method: 'GET',
+        headers: {
+          'Cache-Control': 'no-cache, no-store',
+          'Pragma': 'no-cache',
+        }
+      });
+
+      if (!response.ok) {
+        console.warn(`[AutoSetup] Hata kodu: ${response.status} ${response.statusText}`);
+        return;
       }
-    });
 
-    if (!response.ok) {
-      console.warn(`[AutoSetup] Hata kodu: ${response.status} ${response.statusText}`);
-    }
+      const result = await response.json();
 
-    const result = await response.json();
-
-    if (result.success) {
-      console.log('[AutoSetup] Admin kurulumu başarılı!', result.message);
-      console.log('[AutoSetup] Veritabanı bilgileri:', result.dbInfo);
-    } else if (result.message && result.message.includes('Zaten admin kullanıcıları mevcut')) {
-      console.log('[AutoSetup] Admin kurulumuna gerek yok, zaten mevcut.');
-      console.log('[AutoSetup] Veritabanı bilgileri:', result.dbInfo);
-    } else {
-      console.warn('[AutoSetup] Admin kurulumu başarısız!', result.message);
+      if (result.success) {
+        console.log('[AutoSetup] Admin kurulumu başarılı!', result.message);
+        console.log('[AutoSetup] Veritabanı bilgileri:', result.dbInfo);
+      } else if (result.message && result.message.includes('Zaten admin kullanıcıları mevcut')) {
+        console.log('[AutoSetup] Admin kurulumuna gerek yok, zaten mevcut.');
+        console.log('[AutoSetup] Veritabanı bilgileri:', result.dbInfo);
+      } else {
+        console.warn('[AutoSetup] Admin kurulumu başarısız!', result.message);
+      }
+    } catch (error) {
+      console.error('[AutoSetup] Admin kurulumu sırasında hata oluştu:', error);
     }
   } catch (error) {
-    console.error('[AutoSetup] Admin kurulumu sırasında hata oluştu:', error);
+    console.error('[AutoSetup] Genel hata:', error);
   }
 }
 

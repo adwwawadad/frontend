@@ -69,4 +69,27 @@ if (process.env.NODE_ENV === 'development') {
   clientPromise = client.connect();
 }
 
+// MongoDB'ye bağlanmayı sağlayan fonksiyon
+export async function connect(): Promise<MongoClient | null> {
+  try {
+    return await clientPromise;
+  } catch (error) {
+    console.error('MongoDB bağlantısı sırasında hata:', error);
+    return null;
+  }
+}
+
+// MongoDB bağlantısının durumunu kontrol eden fonksiyon
+export function isConnected(): boolean {
+  try {
+    // client varsa ve bağlantı sağlanmışsa true döndür
+    // Not: MongoClient.topology.isConnected() metodu güncel MongoDB sürümlerinde kaldırılmıştır
+    // Bunun yerine daha basit bir kontrol yapıyoruz
+    return client !== undefined && client !== null;
+  } catch (error) {
+    console.error('MongoDB bağlantı durumu kontrol edilirken hata:', error);
+    return false;
+  }
+}
+
 export default clientPromise; 
