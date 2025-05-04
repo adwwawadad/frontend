@@ -1,35 +1,51 @@
 import mongoose, { Schema } from 'mongoose';
 import crypto from 'crypto';
 
-// Rastgele veritabanı adı oluşturma fonksiyonu
-function generateRandomDbName(): string {
-  const projectIdentifier = process.env.PROJECT_ID || process.env.VERCEL_URL || '';
-  const dbNameSeed = `${projectIdentifier}${Date.now()}`;
-  return crypto.createHash('md5').update(dbNameSeed).digest('hex').substring(0, 10);
+/**
+ * Proje için sabit bir veritabanı adı oluşturur
+ * Bu fonksiyon, proje kimliğine bağlı olarak sabit bir veritabanı adı oluşturur
+ * Böylece her deploy veya yeniden başlatmada aynı veritabanı kullanılır
+ */
+function generateStableDbName(): string {
+  // Proje kimliği için önce PROJECT_ID'yi kontrol edelim, yoksa VERCEL_URL veya varsayılan kullanılır
+  const projectIdentifier = process.env.PROJECT_ID || process.env.VERCEL_URL || 'local-project';
+  
+  // Veritabanı adı olarak proje kimliğinden bir hash oluştur
+  // Bu, proje kimliği değişmediği sürece aynı veritabanı adının kullanılmasını sağlar
+  const dbName = crypto
+    .createHash('md5')
+    .update(projectIdentifier)
+    .digest('hex')
+    .substring(0, 10);
+  
+  return dbName;
 }
 
-// MongoDB URI'yi güncelleme fonksiyonu
-function getMongoUriWithRandomDb(baseUri: string): string {
+/**
+ * MongoDB URI'yi proje için sabit bir veritabanı adıyla günceller
+ */
+function getMongoUriWithStableDb(baseUri: string): string {
   // URI'yi ayrıştır
   const lastSlash = baseUri.lastIndexOf('/');
   
-  // Eğer URI'de / yoksa, sonuna /randomDbName ekle
+  // Eğer URI'de / yoksa, sonuna sabit veritabanı adı ekle
   if (lastSlash === -1) {
-    return `${baseUri}/${generateRandomDbName()}`;
+    return `${baseUri}/${generateStableDbName()}`;
   }
   
-  // Eğer URI'de / varsa, sonuncu / sonrasını kontrol et
+  // Eğer URI'de / varsa, sonuncu / sonrasını değiştir
   const baseUriWithoutDb = baseUri.substring(0, lastSlash);
-  return `${baseUriWithoutDb}/${generateRandomDbName()}`;
+  return `${baseUriWithoutDb}/${generateStableDbName()}`;
 }
 
 // MongoDB bağlantı bilgilerini al
 let MONGO_URI = process.env.MONGO_URI;
 
-// Eğer USE_RANDOM_DB true ise, rastgele veritabanı adı kullan
-if (process.env.USE_RANDOM_DB === 'true' && MONGO_URI) {
-  MONGO_URI = getMongoUriWithRandomDb(MONGO_URI);
-  console.log('MongoDB rastgele veritabanı adı oluşturuldu:', MONGO_URI.replace(/\/\/[^:]+:[^@]+@/, '//****:****@')); // Güvenlik için kullanıcı adı ve şifreyi gizle
+// Eğer USE_PROJECT_DB true ise, proje için sabit veritabanı adı kullan
+// Artık rastgele değil, proje kimliğine bağlı sabit bir ad kullanılıyor
+if (process.env.USE_PROJECT_DB === 'true' && MONGO_URI) {
+  MONGO_URI = getMongoUriWithStableDb(MONGO_URI);
+  console.log('MongoDB proje veritabanı bağlantısı:', MONGO_URI.replace(/\/\/[^:]+:[^@]+@/, '//****:****@')); // Güvenlik için kullanıcı adı ve şifreyi gizle
 }
 
 // Mongoose bağlantısı

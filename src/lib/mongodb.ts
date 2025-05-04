@@ -1,45 +1,54 @@
 import { MongoClient } from 'mongodb';
 import crypto from 'crypto';
 
-// Rastgele veritabanı adı oluşturma fonksiyonu
-function generateDbName(length: number = 8): string {
-  return crypto.randomBytes(length).toString('hex');
+/**
+ * Proje için sabit bir veritabanı adı oluşturur
+ * Bu fonksiyon, proje kimliğine bağlı olarak sabit bir veritabanı adı oluşturur
+ * Böylece her deploy veya yeniden başlatmada aynı veritabanı kullanılır
+ */
+function generateStableDbName(): string {
+  // Proje kimliği için önce PROJECT_ID'yi kontrol edelim, yoksa VERCEL_URL veya varsayılan kullanılır
+  const projectIdentifier = process.env.PROJECT_ID || process.env.VERCEL_URL || 'local-project';
+  
+  // Veritabanı adı olarak proje kimliğinden bir hash oluştur
+  // Bu, proje kimliği değişmediği sürece aynı veritabanı adının kullanılmasını sağlar
+  const dbName = crypto
+    .createHash('md5')
+    .update(projectIdentifier)
+    .digest('hex')
+    .substring(0, 10);
+  
+  return dbName;
 }
 
-// MongoDB URI'yi güncelleme fonksiyonu
-function getMongoUriWithRandomDb(baseUri: string): string {
+/**
+ * MongoDB URI'yi proje için sabit bir veritabanı adıyla günceller
+ */
+function getMongoUriWithStableDb(baseUri: string): string {
   // URI'yi ayrıştır
   const lastSlash = baseUri.lastIndexOf('/');
   
-  // Eğer URI'de / yoksa, sonuna /randomDbName ekle
+  // Eğer URI'de / yoksa, sonuna sabit veritabanı adı ekle
   if (lastSlash === -1) {
-    return `${baseUri}/${generateDbName()}`;
+    return `${baseUri}/${generateStableDbName()}`;
   }
   
-  // Eğer URI'de / varsa, sonuncu / sonrasını kontrol et
+  // Eğer URI'de / varsa, sonuncu / sonrasını değiştir
   const baseUriWithoutDb = baseUri.substring(0, lastSlash);
-  
-  // Proje kodu veya environment'tan alınabilecek sabit bir değer
-  // Bu değer, projeye özgü olabilir veya process.env üzerinden gelebilir
-  const projectIdentifier = process.env.PROJECT_ID || process.env.VERCEL_URL || '';
-  
-  // Veritabanı adını oluştur (projeye özgü olması için projectIdentifier'ı da kullan)
-  const dbNameSeed = `${projectIdentifier}${Date.now()}`;
-  const dbName = crypto.createHash('md5').update(dbNameSeed).digest('hex').substring(0, 10);
-  
-  return `${baseUriWithoutDb}/${dbName}`;
+  return `${baseUriWithoutDb}/${generateStableDbName()}`;
 }
 
 if (!process.env.MONGO_URI) {
   throw new Error('Lütfen MongoDB URI adresini .env dosyasında tanımlayın');
 }
 
-// Rastgele veritabanı adıyla URI oluştur
+// Proje için sabit veritabanı adıyla URI oluştur
 const baseUri = process.env.MONGO_URI;
-const uri = process.env.USE_RANDOM_DB === 'true' 
-  ? getMongoUriWithRandomDb(baseUri)
+const uri = process.env.USE_PROJECT_DB === 'true' 
+  ? getMongoUriWithStableDb(baseUri)
   : baseUri;
 
+// Veritabanı bağlantı bilgilerini logla
 console.log('MongoDB URI konfigürasyonu yapıldı:', uri.replace(/\/\/[^:]+:[^@]+@/, '//****:****@')); // Güvenlik için kullanıcı adı ve şifreyi gizle
 
 let client: MongoClient;
