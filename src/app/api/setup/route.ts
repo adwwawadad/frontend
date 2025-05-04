@@ -1,10 +1,15 @@
 import { NextResponse } from 'next/server';
 import { connect, isConnected } from '@/lib/mongodb';
 import { Admin } from '@/lib/models';
-import { hash } from 'bcrypt';
+import { createHash } from 'crypto';
 
 // API'nin dinamik olarak çalışmasını sağla
 export const dynamic = 'force-dynamic';
+
+// Şifre hashleme fonksiyonu
+function hashPassword(password: string): string {
+  return createHash('sha256').update(password).digest('hex');
+}
 
 // Güvenli gösterilebilir MongoDB URI oluştur
 function getMaskedMongoURI() {
@@ -83,7 +88,7 @@ export async function GET() {
     const defaultAdminPassword = process.env.DEFAULT_ADMIN_PASSWORD || 'admin123!';
     
     // Şifreyi hashle
-    const hashedPassword = await hash(defaultAdminPassword, 10);
+    const hashedPassword = hashPassword(defaultAdminPassword);
     
     // Yeni admin kullanıcısı oluştur
     const newAdmin = new Admin({
